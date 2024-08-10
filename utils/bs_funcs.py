@@ -230,27 +230,17 @@ def mad_straddle_approximation_short(S, ann_sigma, dte):
 #-------------------------------------------------------------------------------------#
 # IRON_CONDOR FUNCTIONS
 
-def select_iron_condor_strikes(function, options, wing_width, S):
-
+def select_iron_condor_strikes(lower, upper, options, wing_width, S):
     puts = options[options['Type'] == 'PUT']
     calls = options[options['Type'] == 'CALL']
 
-    atm_straddle, lower, upper = function(options, S)
+    short_put = puts[(puts['Strike'] == math.floor(lower))]['Strike'].iloc[0]
+    short_call = calls[(calls['Strike'] == math.ceil(upper))]['Strike'].iloc[0]  
     
-    # Select the short put and call closest to the range defined by volatility
-    short_put = puts.iloc[(puts['Strike']-lower).abs().argsort()[:1]].reset_index(drop=True)
-    short_call = calls.iloc[(upper- calls['Strike']).abs().argsort()[:1]].reset_index(drop=True)
-    
-    # Select the long put and call to create the wings of the iron condor
-    long_put = puts[puts['Strike'] < short_put['Strike'].values[0]].iloc[(-puts[puts['Strike'] < short_put['Strike'].values[0]]['Strike'] + (short_put['Strike'].values[0] - wing_width)).abs().argsort()[:1]]
-    long_call = calls[calls['Strike'] > short_call['Strike'].values[0]].iloc[(calls[calls['Strike'] > short_call['Strike'].values[0]]['Strike'] - (short_call['Strike'].values[0] + wing_width)).abs().argsort()[:1]]
-    
-    long_put_strike = long_put['Strike'].iloc[0]
-    short_put_strike = short_put['Strike'].iloc[0] 
-    short_call_strike = short_call['Strike'].iloc[0] 
-    long_call_strike = long_call['Strike'].iloc[0] 
-    
-    return long_put_strike, short_put_strike, short_call_strike, long_call_strike
+    long_put = puts[(puts['Strike'] == short_put - 3 )]['Strike'].iloc[0]
+    long_call = calls[(calls['Strike'] == short_call + 3 )]['Strike'].iloc[0]
+
+    return long_put, short_put, short_call, long_call
 
 
 def iron_condor(options, long_put_strike, short_put_strike, short_call_strike, long_call_strike, qty=10, take_profit=.65, taxes_cost=.2):
@@ -274,7 +264,7 @@ def iron_condor(options, long_put_strike, short_put_strike, short_call_strike, l
         leg_width = (short_put_strike - long_put_strike)
         gain_range = (short_call_strike - short_put_strike)
         max_loss = (leg_width - ((credit_received*qty) / qty)) * qty
-        roc_cost = ((credit_received / (max_loss)) * take_profit * (1-taxes_cost)) * qty
+        roc = ((credit_received / (max_loss)) * take_profit * (1-taxes_cost)) * qty
         ## trade is closed when 65% of max profit is reached
         profit = (credit_received*take_profit*(1-taxes_cost)) *qty
         
@@ -282,13 +272,13 @@ def iron_condor(options, long_put_strike, short_put_strike, short_call_strike, l
         print(f'Gain Range: {gain_range:.2f}')
         print(f'Credit Received/Max Profit: ${credit_received*qty:.2f}')
         print(f'Managed Take Profit: ${profit*qty:.2f}')
-        print(f'Managed ROIC (net): {roc_cost:.2%}')
+        print(f'Managed ROIC (net): {roc:.2%}')
 
     else:
         leg_width = 'Distances not equal'
         print(f"""{leg_width}\nCall distance: {(short_put_strike - long_put_strike)}\nPut distance: {(long_call_strike - short_call_strike)}""")
     
-    return max_loss, gain_range, credit_received, profit, roc_cost, leg_width
+    return max_loss, gain_range, credit_received, profit, roc, leg_width
 
 #-------------------------------------------------------------------------------------#
 # MONTE_CARLO and KELLY_CRITERION FUNCTIONS
