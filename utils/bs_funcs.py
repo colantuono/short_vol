@@ -52,7 +52,7 @@ def black_scholes(S, K, T, r, sigma, type='C') -> float:
         print(f'You entered type = {type}, Please enter type C or P') 
 
 
-def delta(S, K, T, r, sigma, type='p') -> float:
+def delta(S, K, T, r, sigma, type='C') -> float:
     """ Calculates the delta of an european option"""
     d1 = (np.log(S/K) + (r + sigma**2/2)*T)/(sigma*np.sqrt(T))
     type = type.lower()
@@ -82,7 +82,7 @@ def vega(S, K, T, r, sigma) -> float:
     return vega*0.01 ## sensitivity to 1% change in volatility 
   
     
-def theta(S, K, T, r, sigma, type='p') -> float:
+def theta(S, K, T, r, sigma, type='C') -> float:
     """ Calculates the theta of an european option"""
     d1 = (np.log(S/K) + (r + sigma**2/2)*T)/(sigma*np.sqrt(T))
     d2 = d1 - sigma*np.sqrt(T)
@@ -100,7 +100,7 @@ def theta(S, K, T, r, sigma, type='p') -> float:
         print(f'You entered type = {type}, Please enter type C or P') 
   
     
-def rho(S, K, T, r, sigma, type='p') -> float:
+def rho(S, K, T, r, sigma, type='C') -> float:
     """ Calculates the rho of an european option"""
     d1 = (np.log(S/K) + (r + sigma**2/2)*T)/(sigma*np.sqrt(T))
     d2 = d1 - sigma*np.sqrt(T)
@@ -160,25 +160,25 @@ def annualize_rets(r, periods_per_year=252):
     n_periods = r.shape[0]
     return (compounded_growth**(periods_per_year/n_periods)-1).iloc[0]
     
-def realized_cc_vol(prices, periods_per_year=252):
+def realized_cc_vol(prices: pd.DataFrame, periods_per_year: int=252):
     returns = prices.pct_change()
     realized_volatility = np.std(returns.dropna()) * np.sqrt(periods_per_year)  
     return realized_volatility
 
-def parkinson_volatility(df):
-     N = df.shape[0]
+def parkinson_volatility(prices: pd.DataFrame):
+     N = prices.shape[0]
      k = (1/(4 * N * np.log(2)))
-     hi_lo = np.sum(np.log(df['High'] / df['Low']) ** 2)
+     hi_lo = np.sum(np.log(prices['High'] / prices['Low']) ** 2)
      
      return np.sqrt(k*hi_lo) * np.sqrt(252)
 
-def yz_volatility(df, dte): ## FIX
-    df = df[-dte:-1]
-    N = df.shape[1]
-    open = df['Open']
-    close = df['Close']
-    hi = df['High']
-    lo = df['Low']
+def yz_volatility(prices: pd.DataFrame, dte: int): ## FIX
+    prices = prices[-dte:-1]
+    N = prices.shape[1]
+    open = prices['Open']
+    close = prices['Close']
+    hi = prices['High']
+    lo = prices['Low']
     
     sigma_open = (1 / N -1 ) * np.sum([np.log(open.iloc[i] / open.iloc[i-1]) - 1 / N * np.sum(np.log(open.iloc[i] / open.iloc[i-1]) ) for i, o in enumerate(open)]) ** 2
     sigma_close = (1 / N -1 ) * (np.sum([np.log(close.iloc[i] / close.iloc[i-1]) - 1 / N * np.sum(np.log(close.iloc[i] / close.iloc[i-1]) ) for i, o in enumerate(close)]) ** 2)
@@ -205,7 +205,7 @@ def atm_straddle_short(options: pd.DataFrame, S: float):
     return atm_straddle, lower, upper 
 
 
-def atm_straddle_approximation_short(S, ann_sigma, dte): 
+def atm_straddle_approximation_short(S: float, ann_sigma: float, dte: int): 
     atm_straddle = S * ann_sigma * np.sqrt(dte/252)
     lower = (S - atm_straddle) 
     upper = (S + atm_straddle)
@@ -216,7 +216,7 @@ def atm_straddle_approximation_short(S, ann_sigma, dte):
     return atm_straddle, lower, upper 
 
 
-def mad_straddle_approximation_short(S, ann_sigma, dte): 
+def mad_straddle_approximation_short(S: float, ann_sigma: float, dte: int): 
     """This is the aproxximation Formula of ATM Straddle"""
     mad_straddle = (4/5) * S * ann_sigma * np.sqrt(dte/252)
     lower = (S - mad_straddle) 
@@ -230,15 +230,15 @@ def mad_straddle_approximation_short(S, ann_sigma, dte):
 #-------------------------------------------------------------------------------------#
 # IRON_CONDOR FUNCTIONS
 
-def select_iron_condor_strikes(lower, upper, options, wing_width, S):
+def select_iron_condor_strikes(lower: float, upper: float, options: pd.DataFrame, wing_width: float):
     puts = options[options['Type'] == 'PUT']
-    calls = options[options['Type'] == 'CALL']
-
-    short_put = puts[(puts['Strike'] == math.floor(lower))]['Strike'].iloc[0]
-    short_call = calls[(calls['Strike'] == math.ceil(upper))]['Strike'].iloc[0]  
+    calls = options[options['Type'] == 'CALL'] 
     
-    long_put = puts[(puts['Strike'] == short_put - 3 )]['Strike'].iloc[0]
-    long_call = calls[(calls['Strike'] == short_call + 3 )]['Strike'].iloc[0]
+    short_put = puts.iloc[(puts['Strike'] - lower).abs().argsort().iloc[0]]['Strike']
+    short_call = calls.iloc[(calls['Strike'] - upper).abs().argsort().iloc[0]]['Strike']
+    
+    long_put = puts[(puts['Strike'] == short_put - wing_width )]['Strike'].iloc[0]
+    long_call = calls[(calls['Strike'] == short_call + wing_width )]['Strike'].iloc[0]
 
     return long_put, short_put, short_call, long_call
 
@@ -283,12 +283,12 @@ def iron_condor(options, long_put_strike, short_put_strike, short_call_strike, l
 #-------------------------------------------------------------------------------------#
 # MONTE_CARLO and KELLY_CRITERION FUNCTIONS
 
-def gbm(n_years=45/252, n_scenarios=1000, mu=0.07, sigma=0.15, steps_per_year=252, s_0=100.0):
+def gbm(n_years: float, n_scenarios: int, mu: float, sigma: float, steps_per_year: int, S: float):
     dt = 1 / steps_per_year
     n_steps = int(n_years * steps_per_year) + 1
     rets_plus_1 = np.random.normal(loc=(mu * dt + 1), scale=(sigma * np.sqrt(dt)), size=(n_steps, n_scenarios))
     rets_plus_1[0] = 1
-    prices = s_0 * pd.DataFrame(rets_plus_1).cumprod()
+    prices = S * pd.DataFrame(rets_plus_1).cumprod()
     return prices
 
 
