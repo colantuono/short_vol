@@ -153,41 +153,76 @@ def implied_vol(S, K, T, r, market_price, type='C', tol=1e-5) -> float:
     return implied_vol   
 
 #-------------------------------------------------------------------------------------#
-## VOLATILITIES/RETURN FUCTIONSand EXPECTED_MOVE FUNCTIONS
+## RETURN and ANNUALIZED VOLATILITY FUCTIONS
 
-def annualize_rets(r, periods_per_year=252):
+def annualized_returns(r: pd.DataFrame, periodos=252):
+    r = r[-periodos:]
     compounded_growth = (1+r).prod()
     n_periods = r.shape[0]
-    return (compounded_growth**(periods_per_year/n_periods)-1).iloc[0]
+    per_rets = (compounded_growth**(periodos/n_periods)-1).iloc[0]
+    return per_rets
     
-def realized_cc_vol(prices: pd.DataFrame, periods_per_year: int=252):
-    returns = prices.pct_change()
-    realized_volatility = np.std(returns.dropna()) * np.sqrt(periods_per_year)  
-    return realized_volatility
+def cc_volatility(precos_fechamento: pd.DataFrame, periodos: int=20, annualized=True):
+    rets = precos_fechamento / precos_fechamento.shift(1)-1
+    cc_vol = rets.rolling(periodos).std()
+    if annualized:
+        return cc_vol * np.sqrt(252)
+    else:
+        return cc_vol  * np.sqrt(periodos)
 
-def parkinson_volatility(prices: pd.DataFrame):
-     N = prices.shape[0]
-     k = (1/(4 * N * np.log(2)))
-     hi_lo = np.sum(np.log(prices['High'] / prices['Low']) ** 2)
-     
-     return np.sqrt(k*hi_lo) * np.sqrt(252)
+def parkinson_volatility(df: pd.DataFrame, periodos: int=20, annualized=True):
+    hi_lo = (np.log(df['High'] / df['Low'])) ** 2
+    pk_vol = np.sqrt(hi_lo.rolling(periodos).mean() / 4 * np.log(2)) 
+    if annualized:
+        return pk_vol * np.sqrt(252)
+    else: 
+        return pk_vol * np.sqrt(periodos)
 
-def yz_volatility(prices: pd.DataFrame, dte: int): ## FIX
-    prices = prices[-dte:-1]
-    N = prices.shape[1]
-    open = prices['Open']
-    close = prices['Close']
-    hi = prices['High']
-    lo = prices['Low']
+def garman_klass_volatility(df: pd.DataFrame, periodos: int=20, annualized=True):
+    hi_lo = (np.log(df['High'] / df['Low'])) ** 2
+    cl_op = (np.log(df['Adj Close'] / df['Open'])) ** 2
+    gk = 0.5 * hi_lo - (2 * np.log(2) - 1) * cl_op
+    gk_vol = (np.sqrt(gk.rolling(periodos).mean())) 
+    if annualized:
+        return gk_vol * np.sqrt(252)
+    else:
+        return gk_vol * np.sqrt(periodos)
+
+def rogers_satchell_volatility(df: pd.DataFrame, periodos: int=20, annualized=True):
+    hi_cl = np.log(df['High'] / df['Adj Close'])
+    hi_op = np.log(df['High'] / df['Open'])
+    lo_cl = np.log(df['Low'] / df['Adj Close'])
+    lo_op = np.log(df['Low'] / df['Open'])
+    rs = np.sqrt((hi_cl * hi_op + lo_cl * lo_op).rolling(periodos).mean())
+    rs_vol = rs 
+    if annualized:
+        return rs_vol * np.sqrt(252)
+    else:
+        return rs_vol * np.sqrt(periodos)
+
+def yang_zhang_volatility(df: pd.DataFrame, periodos: int=20, annualized=True): 
+    hi_cl = np.log(df['High'] / df['Adj Close'])
+    hi_op = np.log(df['High'] / df['Open'])
+    lo_cl = np.log(df['Low'] / df['Adj Close'])
+    lo_op = np.log(df['Low'] / df['Open'])
+    rs = np.sqrt((hi_cl * hi_op + lo_cl * lo_op).rolling(periodos).mean())
     
-    sigma_open = (1 / N -1 ) * np.sum([np.log(open.iloc[i] / open.iloc[i-1]) - 1 / N * np.sum(np.log(open.iloc[i] / open.iloc[i-1]) ) for i, o in enumerate(open)]) ** 2
-    sigma_close = (1 / N -1 ) * (np.sum([np.log(close.iloc[i] / close.iloc[i-1]) - 1 / N * np.sum(np.log(close.iloc[i] / close.iloc[i-1]) ) for i, o in enumerate(close)]) ** 2)
-    sigma_hilo = (1 / N ) * np.sum([np.log(hi.iloc[i] / close.iloc[i-1]) * np.log(hi.iloc[i] / open.iloc[i-1]) + np.log(lo.iloc[i] / close.iloc[i-1]) * np.log(lo.iloc[i] / open.iloc[i-1]) for i, o in enumerate(close)])
-    k = 0.34 / (1.34 + (N+1) / (N-1) )
-    
-    yz_vol = np.sqrt(sigma_open + k*sigma_close + (1 - k)*sigma_hilo) * np.sqrt(252)
-    
-    return yz_vol 
+    op_cl_1 = np.log(df['Open'] / df['Adj Close'].shift(1) )
+    # hi_op = np.log(df['High'] / df['Open'] )
+    # lo_op = np.log(df['Low'] / df['Open'] )
+    cl_op = np.log(df['Adj Close'] / df['Open'] )
+
+    open_close_vol = (cl_op.rolling(periodos).std())
+    overnight_vol = (op_cl_1.rolling(periodos).std())
+
+    k = 0.34 / (1.34 + (periodos+1) / (periodos-1) )
+ 
+    yz = np.sqrt(overnight_vol**2 + k*open_close_vol**2 + (1 - k)*rs**2)
+    yz_vol = yz 
+    if annualized:
+        return yz_vol * np.sqrt(252)
+    else: 
+        return yz_vol * np.sqrt(periodos)
 
 #-------------------------------------------------------------------------------------#
 ## EXPECTED_MOVE FUNCTIONS
@@ -266,7 +301,7 @@ def iron_condor(options, long_put_strike, short_put_strike, short_call_strike, l
         max_loss = (leg_width - ((credit_received*qty) / qty)) * qty
         roc = ((credit_received / (max_loss)) * take_profit * (1-taxes_cost)) * qty
         ## trade is closed when 65% of max profit is reached
-        profit = (credit_received*take_profit*(1-taxes_cost)) *qty
+        profit = (credit_received*take_profit*(1-taxes_cost)) 
         
         print(f'Position Risk: {max_loss:.2f}')
         print(f'Gain Range: {gain_range:.2f}')
@@ -362,7 +397,7 @@ def plot_paths(gbm_df, ceiling=None, floor=None):
     return win_pct, loss_above, loss_bellow
 
 
-def kelly_criterion(p, b, bet_factor=0.5, portfolio_size=10000):
+def kelly_criterion(p, b, kelly=0.5, portfolio_size=10000):
     """
     Calculate the position size fraction based on a fraction of the Kelly Criterion.
     p: Probability of the strategy being profitable.
@@ -377,7 +412,7 @@ def kelly_criterion(p, b, bet_factor=0.5, portfolio_size=10000):
     q = 1 - p  # Probability of strategy being unprofitable
 
     # Calculate the Kelly fraction
-    kelly_fraction = ((b * p - q) / b) * bet_factor
+    kelly_fraction = ((b * p - q) / b) * kelly
     max_risk = portfolio_size*kelly_fraction
 
     # Return a fraction of the Kelly fraction
