@@ -7,6 +7,7 @@ import requests
 import yfinance as yf
 from datetime import datetime
 import math
+import plotly.graph_objects as go
 
 #-------------------------------------------------------------------------------------#
 # GET_DATA FUNCTIONS
@@ -22,6 +23,17 @@ def get_options_chain(underlying: str, exp_date: str) -> pd.DataFrame:
     chain = pd.DataFrame(l, columns=['Option', 'Type', 'E/A', 'Moneyness', 'Strike', 'Distance', 'Premium', 'volume'] )
     chain['abs_Distance'] = chain['Distance'].abs() 
     return chain
+
+def get_rfr(id_serie:int=432, start_date:str='01/01/1994', end_date:str='31/12/2200') -> pd.DataFrame:
+    """get data from Sistema Gerenciador de Séries Temporais (SGS) of Brazilian Banco Central
+    
+    """
+    url = f'https://api.bcb.gov.br/dados/serie/bcdata.sgs.{id_serie}/dados?formato=json&dataInicial={start_date}&dataFinal={end_date}'
+    df = pd.read_json(url)
+    df.set_index('data', inplace = True)
+    df.index = pd.to_datetime(df.index, dayfirst= True)
+    selic = df.iloc[-1].iloc[0] / 100
+    return selic
 
 #-------------------------------------------------------------------------------------#
 # BLACK_SCHOLES FUNCTIONS
@@ -227,21 +239,29 @@ def yang_zhang_volatility(df: pd.DataFrame, periodos: int=20, annualized=True):
 #-------------------------------------------------------------------------------------#
 ## EXPECTED_MOVE FUNCTIONS
 
-def atm_straddle_short(options: pd.DataFrame, S: float):
+def get_vol_from_straddle(move, S):
+    return (move / S * 1.25) 
+
+def atm_straddle_short(options: pd.DataFrame, S: float, sigma: float, dte: int):
     atm_strike = options.iloc[(options['Distance']-0).abs().argsort()[:1]].reset_index()['Strike'][0]
     atm_straddle = options[options['Strike'] == atm_strike]['Premium'].sum()
 
-    lower = (S - atm_straddle) 
     upper = (S + atm_straddle)
-
-    print(f'ATM Straddle: {atm_straddle:.2f}')
-    print(f'Range Expectation using ATM Straddle {lower:.2f} e {upper:.2f}')
+    lower = (S - atm_straddle)
+    range = upper - lower
+    vol = get_vol_from_straddle(atm_straddle, S)
+    
+    print(f'Preço Straddle: {atm_straddle:.2f}')
+    print(f'Intervalo: {range:.2f}')
+    print(f'Limite Superior: {upper:.2f}')
+    print(f'Limite Inferior: {lower:.2f}')
+    print(f'Volatilidade: {vol:.2%}')
     
     return atm_straddle, lower, upper 
 
 
-def atm_straddle_approximation_short(S: float, ann_sigma: float, dte: int): 
-    atm_straddle = S * ann_sigma * np.sqrt(dte/252)
+def atm_straddle_approximation_short(options: pd.DataFrame, S: float, sigma: float, dte: int): 
+    atm_straddle = S * sigma * np.sqrt(dte/252)
     lower = (S - atm_straddle) 
     upper = (S + atm_straddle)
 
@@ -251,23 +271,87 @@ def atm_straddle_approximation_short(S: float, ann_sigma: float, dte: int):
     return atm_straddle, lower, upper 
 
 
-def mad_straddle_approximation_short(S: float, ann_sigma: float, dte: int): 
+def mad_straddle_approximation_short(S: float, sigma: float, dte: int): 
     """This is the aproxximation Formula of ATM Straddle"""
-    mad_straddle = (4/5) * S * ann_sigma * np.sqrt(dte/252)
+    mad_straddle = (4/5) * S * sigma * np.sqrt(dte/252)
     lower = (S - mad_straddle) 
     upper = (S + mad_straddle)
-
-    print(f'MAD Straddle: {mad_straddle:.2f}')
-    print(f'Range Expectation using MAD Straddle {lower:.2f} e {upper:.2f}')
+    vol = get_vol_from_straddle(mad_straddle, S)
+    
+    print(f'Preço Straddle: {mad_straddle:.2f}')
+    print(f'Intervalo: {mad_straddle*2:.2f}')
+    print(f'Limite Superior: {upper:.2f}')
+    print(f'Limite Inferior: {lower:.2f}')
+    print(f'Volatilidade: {vol:.2%}')
     
     return mad_straddle, lower, upper 
+
+
+def plot_atm_straddle(options: pd.DataFrame, S: float, dte: int):
+    atm_strike = options.iloc[(options['Distance']-0).abs().argsort()[:1]].reset_index()['Strike'][0]
+    atm_straddle = options[options['Strike'] == atm_strike]['Premium'].sum()
+
+    upper = (S + atm_straddle)
+    lower = (S - atm_straddle)
+    range = upper - lower
+    vol = get_vol_from_straddle(atm_straddle, S)
+    
+    print(f'Preço Straddle: {atm_straddle:.2f}')
+    print(f'Intervalo: {range:.2f}')
+    print(f'Limite Superior: {upper:.2f}')
+    print(f'Limite Inferior: {lower:.2f}')
+    print(f'Volatilidade: {vol:.2%}')
+    
+    # Plotting
+    fig = go.Figure()
+    days = [0, dte-1]
+    fig.add_trace(go.Scatter(x=days, y=[S, upper], mode='lines', name='Acima', line=dict(color='green')))
+    fig.add_trace(go.Scatter(x=days, y=[S, lower], mode='lines', name='Abaixo', line=dict(color='green')))
+    fig.add_trace(go.Scatter(y=[S]*dte, mode='lines', name='Preço BOVA11', line=dict(color='black', dash='dot')))
+    fig.update_layout(height=500, width=600, hovermode="closest",
+    xaxis_title="Dias até Vencimento",
+    yaxis_title="Preço de S",
+    title="ATM Straddle") 
+    fig.show()
+    
+    return atm_straddle, lower, upper 
+
+def plot_expected_move(S, sigma, dte):
+    upper_move, lower_move = [], []
+    
+    for day in np.arange(0, dte):
+        mad_straddle = (4/5) * S * sigma * np.sqrt(day/252)
+        upper_move.append(S + mad_straddle)
+        lower_move.append(S - mad_straddle)
+
+    vol = get_vol_from_straddle(mad_straddle, S)
+
+    print(f'Preço Straddle: {mad_straddle:.2f}')
+    print(f'Intervalo: {mad_straddle*2:.2f}')
+    print(f'Limite Superior: {upper_move[-1]:.2f}')
+    print(f'Limite Inferior: {lower_move[-1]:.2f}')
+    print(f'Volatilidade: {vol:.2%}')
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=upper_move, mode='lines', name='Movimento Acima', line=dict(color='green')))
+    fig.add_trace(go.Scatter(y=lower_move, mode='lines', name='Movimento Abaixo', line=dict(color='green')))
+    fig.add_trace(go.Scatter(y=[S]*dte, mode='lines', name='Preço BOVA11', line=dict(color='black', dash='dot')))
+    fig.update_layout(height=500, width=600, hovermode="closest",
+    xaxis_title="Dias até Vencimento",
+    yaxis_title="Preço de S",
+    title="Movimento Esperado") 
+    fig.show()
+
+    return mad_straddle, upper_move, lower_move   
+
+
 
 #-------------------------------------------------------------------------------------#
 # IRON_CONDOR FUNCTIONS
 
 def select_iron_condor_strikes(lower: float, upper: float, options: pd.DataFrame, wing_width: float):
-    puts = options[options['Type'] == 'PUT']
-    calls = options[options['Type'] == 'CALL'] 
+    puts = options[(options['Type'] == 'PUT')]
+    calls = options[(options['Type'] == 'CALL')] 
     
     short_put = puts.iloc[(puts['Strike'] - lower).abs().argsort().iloc[0]]['Strike']
     short_call = calls.iloc[(calls['Strike'] - upper).abs().argsort().iloc[0]]['Strike']
@@ -397,26 +481,23 @@ def plot_paths(gbm_df, ceiling=None, floor=None):
     return win_pct, loss_above, loss_bellow
 
 
-def kelly_criterion(p, b, kelly=0.5, portfolio_size=10000):
+def kelly_criterion(p, R, L, portfolio_size, multiplier=1.0):
     """
-    Calculate the position size fraction based on a fraction of the Kelly Criterion.
-    p: Probability of the strategy being profitable.
-    b: Profit-to-loss ratio of the strategy.
-    portfolio_size: total amount of money
+    Calculate the Kelly Criterion for options credit strategies where:
+        potential loss is greater than the return.
     
-    returns:
-    kelly_fraction: kelly_fraction
-    max_risk: maximum monetary value to risk  
+    Parameters:
+    p (float): Probability of the trade being profitable.
+    R (float): Return on the trade (premium received as a percentage of the margin/collateral).
+    L (float): Potential loss as a multiple of the premium received.
+    portfolio_size (float): The total amount of capital in the portfolio.
+    multiplier (float): The fraction of Kelly Criterion to use (e.g., 0.5 for half-Kelly).
+
     """
-
-    q = 1 - p  # Probability of strategy being unprofitable
-
-    # Calculate the Kelly fraction
-    kelly_fraction = ((b * p - q) / b) * kelly
-    max_risk = portfolio_size*kelly_fraction
-
-    # Return a fraction of the Kelly fraction
-    return kelly_fraction, max_risk
+    f_star = (p * (1 + R) - (1 - p) * L) / L
+    fraction_to_wager = f_star * multiplier
+    amount_to_wager = fraction_to_wager * portfolio_size
+    return amount_to_wager, fraction_to_wager
 
 
 #-------------------------------------------------------------------------------------#
